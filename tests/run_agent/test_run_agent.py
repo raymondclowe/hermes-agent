@@ -4555,24 +4555,30 @@ class TestRunConversation:
 
     def test_transform_api_request_hook_mutates_api_kwargs(self, agent):
         """The transform_api_request hook receives mutable api_kwargs and
-        plugins can modify messages before they reach the provider."""
+        plugin mutations (model + messages) reach the provider call."""
         self._setup_agent(agent)
         resp = _mock_response(content="Compressed response", finish_reason="stop")
         agent.client.chat.completions.create.return_value = resp
 
         hook_received_kwargs = {}
         transform_called = False
+        MUTATED_MODEL = "router/cheap-model"
+        MUTATED_CONTENT = "[transformed-by-plugin]"
 
         def _transform_hook(name, **kwargs):
             nonlocal transform_called, hook_received_kwargs
             if name == "transform_api_request":
                 hook_received_kwargs = dict(kwargs)
-                # Simulate a compression plugin: strip tool outputs
+                # Simulate a cost-aware-routing + rewriting plugin: mutate
+                # both the model and the outgoing messages in place.  These
+                # are values we can deterministically observe in the actual
+                # client invocation below.
                 api_kw = kwargs.get("api_kwargs", {})
+                api_kw["model"] = MUTATED_MODEL
                 msgs = api_kw.get("messages", [])
                 for m in msgs:
-                    if m.get("role") == "tool" and m.get("content"):
-                        m["content"] = "[compressed]"
+                    if m.get("role") == "user":
+                        m["content"] = MUTATED_CONTENT
                 transform_called = True
             return []
 
@@ -4595,6 +4601,17 @@ class TestRunConversation:
         # Verify key metadata fields are present
         assert hook_received_kwargs.get("session_id") == agent.session_id
         assert hook_received_kwargs.get("model") == agent.model
+
+        # The mutations must reach the actual provider call — assert on the
+        # real client invocation, not just on the hook's view of api_kwargs.
+        agent.client.chat.completions.create.assert_called()
+        sent_kwargs = agent.client.chat.completions.create.call_args.kwargs
+        assert sent_kwargs.get("model") == MUTATED_MODEL
+        sent_user_msgs = [
+            m for m in sent_kwargs.get("messages", []) if m.get("role") == "user"
+        ]
+        assert sent_user_msgs, "expected at least one user message in the request"
+        assert all(m.get("content") == MUTATED_CONTENT for m in sent_user_msgs)
 
 
 class TestHookPayloadSanitizesSimpleNamespace:

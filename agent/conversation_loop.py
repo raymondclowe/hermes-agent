@@ -805,6 +805,11 @@ def run_conversation(
         finish_reason = "stop"
         response = None  # Guard against UnboundLocalError if all retries fail
         api_kwargs = None  # Guard against UnboundLocalError in except handler
+        # Request-scoped model. A transform_api_request plugin may rewrite
+        # api_kwargs["model"] (cost-aware routing), so downstream telemetry
+        # must report the model actually sent, not the pre-transform
+        # agent.model. Refreshed from api_kwargs after the hook runs.
+        request_model = agent.model
         api_request_id = f"{turn_id}:api:{api_call_count}"
         agent._current_api_request_id = api_request_id
 
@@ -982,6 +987,13 @@ def run_conversation(
                         )
                 except Exception:
                     pass
+
+                # Re-read the request-scoped model from api_kwargs: the
+                # transform_api_request hook may have rewritten it. Later
+                # telemetry (post_api_request, api_request_error) reports
+                # this value so accounting reflects what was actually sent.
+                if isinstance(api_kwargs, dict):
+                    request_model = api_kwargs.get("model", agent.model) or agent.model
 
                 if env_var_enabled("HERMES_DUMP_REQUESTS"):
                     agent._dump_api_request_debug(api_kwargs, reason="preflight")
@@ -1168,6 +1180,7 @@ def run_conversation(
                         max_retries=max_retries,
                         retryable=True,
                         reason="invalid_response",
+                        request_model=request_model,
                     )
                     # Stop spinner silently — retry status is now buffered
                     # and only surfaced if every retry+fallback exhausts.
@@ -2055,6 +2068,7 @@ def run_conversation(
                     max_retries=max_retries,
                     retryable=classified.retryable,
                     reason=classified.reason.value,
+                    request_model=request_model,
                 )
 
                 if (
@@ -3357,7 +3371,7 @@ def run_conversation(
                         api_request_id=api_request_id,
                         session_id=agent.session_id or "",
                         platform=agent.platform or "",
-                        model=agent.model,
+                        model=request_model,
                         provider=agent.provider,
                         base_url=agent.base_url,
                         api_mode=agent.api_mode,

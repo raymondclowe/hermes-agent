@@ -2085,6 +2085,7 @@ class AIAgent:
         max_retries: Optional[int] = None,
         retryable: Optional[bool] = None,
         reason: Optional[str] = None,
+        request_model: Optional[str] = None,
     ) -> None:
         # Lazy module import (not from-import) so tests that
         # ``monkeypatch.setattr("hermes_cli.plugins.has_hook", ...)`` still
@@ -2103,7 +2104,7 @@ class AIAgent:
                 api_request_id=api_request_id,
                 session_id=self.session_id or "",
                 platform=self.platform or "",
-                model=self.model,
+                model=request_model or self.model,
                 provider=self.provider,
                 base_url=self.base_url,
                 api_mode=self.api_mode,
